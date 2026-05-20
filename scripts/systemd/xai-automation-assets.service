@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Content Automation - Asset Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-content-automation
+EnvironmentFile=/etc/xai-automation/xai.env
+ExecStart=/opt/ai-content-automation/.venv/bin/xai-automation serve-assets
+Restart=on-failure
+RestartSec=3
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

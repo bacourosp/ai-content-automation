@@ -1,0 +1,11 @@
+[Unit]
+Description=AI Content Automation - Run schedule
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Unit=xai-automation-run.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

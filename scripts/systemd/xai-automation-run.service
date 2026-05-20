@@ -1,0 +1,11 @@
+[Unit]
+Description=AI Content Automation - Run Once
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-content-automation
+EnvironmentFile=/etc/xai-automation/xai.env
+ExecStart=/opt/ai-content-automation/.venv/bin/xai-automation run-once
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

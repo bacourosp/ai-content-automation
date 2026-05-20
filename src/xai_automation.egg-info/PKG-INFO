@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: xai-automation
+Version: 0.1.0
+Summary: Low-resource local automation: detect AI posts on X, reason with DeepSeek via NVIDIA API, generate platform assets, render video via Higgsfield MCP, queue/publish.
+Requires-Python: >=3.11
+Requires-Dist: python-dotenv<2,>=1.0.1
+Requires-Dist: requests<3,>=2.32.0

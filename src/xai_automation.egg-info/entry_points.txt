@@ -1,0 +1,2 @@
+[console_scripts]
+xai-automation = xai_automation.cli:main

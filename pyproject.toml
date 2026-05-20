@@ -1,0 +1,16 @@
+[project]
+name = "xai-automation"
+version = "0.1.0"
+description = "Low-resource local automation: detect AI posts on X, reason with DeepSeek via NVIDIA API, generate platform assets, render video via Higgsfield MCP, queue/publish."
+requires-python = ">=3.11"
+dependencies = [
+  "python-dotenv>=1.0.1,<2",
+  "requests>=2.32.0,<3",
+]
+
+[project.scripts]
+xai-automation = "xai_automation.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

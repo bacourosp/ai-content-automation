@@ -1,0 +1,11 @@
+[Unit]
+Description=AI Content Automation - Publish schedule
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Unit=xai-automation-publish.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

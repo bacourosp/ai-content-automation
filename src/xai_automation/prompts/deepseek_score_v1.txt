@@ -1,0 +1,67 @@
+Devuelve únicamente JSON válido. No markdown. No texto extra.
+
+Tarea: dado un post de X sobre IA, decidir si vale la pena convertirlo y producir el paquete completo para TikTok, Instagram y Facebook.
+
+Entrada:
+- post_text
+- author_handle
+- created_at
+- url
+- language_hint
+
+Reglas:
+- Eficiencia: frases cortas, sin relleno, sin repetir el post.
+- Si no hay novedad/valor, topic_score bajo.
+- Si es promo/spam, topic_score muy bajo y category="spam".
+- No inventes datos no presentes; si falta detalle, formula en términos generales.
+
+Categorias válidas:
+ai_news,launches,model_releases,viral_ai_content,research,startups,tools,controversies,spam
+
+Output JSON (keys fijas):
+{
+  "topic_score":0,
+  "category":"",
+  "viral_angle":"",
+  "hook":"",
+  "audience":"",
+  "visual_style":"",
+  "content_plan":{
+    "tiktok":{
+      "seconds":0,
+      "hook":"",
+      "script":"",
+      "storyboard":[{"t":0,"duration":0,"on_screen_text":"","voiceover":"","visual":"","broll":""}],
+      "caption":"",
+      "hashtags":[""],
+      "shot_list":[""],
+      "broll_suggestions":[""]
+    },
+    "instagram":{
+      "reel":{
+        "seconds":0,
+        "hook":"",
+        "script":"",
+        "storyboard":[{"t":0,"duration":0,"on_screen_text":"","voiceover":"","visual":"","broll":""}]
+      },
+      "caption":"",
+      "cta":"",
+      "hashtags":[""],
+      "carousel":{
+        "enabled":false,
+        "slides":[{"title":"","bullets":[""],"footer":""}]
+      }
+    },
+    "facebook":{
+      "post_long":"",
+      "cta":"",
+      "hashtags":[""],
+      "video":{
+        "seconds":0,
+        "hook":"",
+        "script":"",
+        "storyboard":[{"t":0,"duration":0,"on_screen_text":"","voiceover":"","visual":"","broll":""}]
+      }
+    }
+  }
+}

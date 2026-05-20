@@ -1,0 +1,11 @@
+[Unit]
+Description=AI Content Automation - Process Publish Queue
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-content-automation
+EnvironmentFile=/etc/xai-automation/xai.env
+ExecStart=/opt/ai-content-automation/.venv/bin/xai-automation process-queue --limit 10
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
