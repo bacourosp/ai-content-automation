@@ -50,6 +50,8 @@ class Settings:
 
     higgsfield_mcp_url: str
     higgsfield_api_key: str
+    higgsfield_api_key_id: str
+    higgsfield_api_key_secret: str
     higgsfield_timeout_seconds: int
 
     tiktok_access_token: str
@@ -140,7 +142,9 @@ def load_settings() -> Settings:
         x_exclude_keywords=_as_csv(env("X_EXCLUDE_KEYWORDS", "giveaway,airdrop,crypto,nft,casino,betting,adult")),
         x_language_hint=_as_csv(env("X_LANGUAGE_HINT", "en,es")),
         higgsfield_mcp_url=env("HIGGSFIELD_MCP_URL", "") or "",
-        higgsfield_api_key=env("HIGGSFIELD_API_KEY", "") or "",
+        higgsfield_api_key=env("HIGGSFIELD_API_KEY", "") or (env("HIGGSFIELD_API_KEY_SECRET", "") or ""),
+        higgsfield_api_key_id=env("HIGGSFIELD_API_KEY_ID", "") or "",
+        higgsfield_api_key_secret=env("HIGGSFIELD_API_KEY_SECRET", "") or "",
         higgsfield_timeout_seconds=_as_int(env("HIGGSFIELD_TIMEOUT_SECONDS", "900"), 900),
         tiktok_access_token=env("TIKTOK_ACCESS_TOKEN", "") or "",
         tiktok_refresh_token=env("TIKTOK_REFRESH_TOKEN", "") or "",
