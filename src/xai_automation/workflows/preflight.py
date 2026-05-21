@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from xai_automation.config.settings import Settings
 from xai_automation.connectors.x_api import XApiClient, build_ai_query
 from xai_automation.mcp.http_client import McpHttpClient
 from xai_automation.services.deepseek import DeepSeekClient, DeepSeekConfig
+from xai_automation.storage.repo import Repo
 
 
 log = logging.getLogger("xai_automation.preflight")
@@ -23,7 +25,7 @@ class CheckResult:
         return {"ok": self.ok, "level": self.level, "message": self.message}
 
 
-def run_preflight(*, settings: Settings, network: bool = True) -> dict[str, Any]:
+def run_preflight(*, settings: Settings, network: bool = True, repo: Repo | None = None) -> dict[str, Any]:
     checks: dict[str, CheckResult] = {}
 
     checks["env.nvidia_api_key"] = _req(settings.nvidia_api_key, "NVIDIA_API_KEY")
@@ -31,6 +33,9 @@ def run_preflight(*, settings: Settings, network: bool = True) -> dict[str, Any]
     checks["env.x_bearer_token"] = _req(settings.x_bearer_token, "X_BEARER_TOKEN")
     checks["env.higgsfield_mcp_url"] = _req(settings.higgsfield_mcp_url, "HIGGSFIELD_MCP_URL")
     checks["env.higgsfield_api_key"] = _req(settings.higgsfield_api_key, "HIGGSFIELD_API_KEY")
+
+    if repo is not None:
+        checks.update(_check_costs(settings=settings, repo=repo))
 
     if settings.require_approval:
         checks["env.publisher_tokens"] = CheckResult(
@@ -125,3 +130,39 @@ def _finalize(checks: dict[str, CheckResult]) -> dict[str, Any]:
         "warnings": warns,
         "checks": {k: v.to_dict() for k, v in checks.items()},
     }
+
+
+def _check_costs(*, settings: Settings, repo: Repo) -> dict[str, CheckResult]:
+    month_key = datetime.now(timezone.utc).strftime("%Y-%m")
+    used_usd = repo.get_monthly_cost_total(provider="higgsfield", month_key=month_key)
+    used_units = repo.get_monthly_cost_units(provider="higgsfield", month_key=month_key)
+    free_usd = float(settings.higgsfield_free_tier_monthly_usd)
+    free_videos = int(settings.higgsfield_free_tier_monthly_videos)
+
+    level = "ok"
+    ok = True
+    msg_parts = [f"month={month_key}", f"used_usd={used_usd:.6f}", f"used_videos={used_units}"]
+    if free_usd > 0:
+        msg_parts.append(f"free_tier_usd={free_usd:.6f}")
+        if used_usd >= free_usd:
+            ok = False
+            level = "error"
+        elif used_usd >= free_usd * 0.9:
+            level = "warn"
+    if free_videos > 0:
+        msg_parts.append(f"free_tier_videos={free_videos}")
+        if used_units >= free_videos:
+            ok = False
+            level = "error"
+        elif used_units >= int(free_videos * 0.9):
+            if level != "error":
+                level = "warn"
+
+    checks: dict[str, CheckResult] = {}
+    checks["cost.higgsfield_month"] = CheckResult(ok=ok, level=level, message="; ".join(msg_parts))
+    recent = repo.list_api_errors(limit=1, provider="higgsfield", job_id=None)
+    if recent and int(recent[0].get("is_quota") or 0) == 1:
+        checks["logs.higgsfield_quota_recent"] = CheckResult(ok=True, level="warn", message="se detectó al menos 1 error reciente de cuota/límite")
+    else:
+        checks["logs.higgsfield_quota_recent"] = CheckResult(ok=True, level="ok", message="ok")
+    return checks

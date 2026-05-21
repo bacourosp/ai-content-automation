@@ -19,6 +19,7 @@ def test_pipeline_e2e_stubbed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-prod")
     monkeypatch.setenv("HIGGSFIELD_MCP_URL", "http://localhost:1234")
     monkeypatch.setenv("HIGGSFIELD_API_KEY", "h")
+    monkeypatch.setenv("HIGGSFIELD_COST_PER_VIDEO_USD", "0.25")
     monkeypatch.setenv("REQUIRE_APPROVAL", "true")
 
     import xai_automation.workflows.pipeline as pmod
@@ -142,7 +143,7 @@ def test_pipeline_e2e_stubbed(tmp_path: Path, monkeypatch) -> None:
     run_once(settings=s, db=db)
 
     with db.connect() as con:
-        jobs = con.execute("SELECT state FROM jobs").fetchall()
+        jobs = con.execute("SELECT id, state FROM jobs").fetchall()
         assert len(jobs) == 1
         assert jobs[0]["state"] == "queued"
         q = con.execute("SELECT platform, status, payload_json FROM publish_queue").fetchall()
@@ -152,3 +153,138 @@ def test_pipeline_e2e_stubbed(tmp_path: Path, monkeypatch) -> None:
             payload = json.loads(row["payload_json"])
             assert payload["topic_score"] == 80
 
+        job_id = str(jobs[0]["id"])
+        v = con.execute("SELECT id FROM assets WHERE job_id = ? AND kind = 'video' LIMIT 1", (job_id,)).fetchone()
+        assert v is not None
+        video_asset_id = str(v["id"])
+        ce = con.execute(
+            "SELECT provider, job_id, asset_id, cost_usd, units FROM cost_events WHERE provider = 'higgsfield' AND job_id = ?",
+            (job_id,),
+        ).fetchone()
+        assert ce is not None
+        assert str(ce["asset_id"]) == video_asset_id
+        assert abs(float(ce["cost_usd"]) - 0.25) < 1e-9
+        assert int(ce["units"]) == 1
+
+
+def test_pipeline_logs_higgsfield_quota_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "data" / "app.db"))
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("ASSETS_DIR", str(tmp_path / "out" / "assets"))
+    monkeypatch.setenv("X_BEARER_TOKEN", "x")
+    monkeypatch.setenv("X_SOURCES", "search")
+    monkeypatch.setenv("NVIDIA_API_KEY", "n")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-prod")
+    monkeypatch.setenv("HIGGSFIELD_MCP_URL", "http://localhost:1234")
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "h")
+    monkeypatch.setenv("REQUIRE_APPROVAL", "true")
+
+    import xai_automation.workflows.pipeline as pmod
+    from xai_automation.services.errors import ApiCallError
+
+    class _FakeX:
+        def __init__(self, bearer_token: str, timeout_seconds: int):
+            pass
+
+        def fetch_recent_search(self, *, query: str, since_id: str | None, max_results: int, languages: list[str]):
+            from xai_automation.connectors.x_api import XPost
+
+            return (
+                [
+                    XPost(
+                        id="100",
+                        author_handle="someone",
+                        created_at="2026-01-01T00:00:00Z",
+                        text="OpenAI released a new model for coding.",
+                        url="https://x.com/someone/status/100",
+                        lang="en",
+                    )
+                ],
+                "100",
+            )
+
+    class _FakeDeepSeek:
+        def __init__(self, cfg):
+            pass
+
+        def score_post(self, *, prompt: str, post_payload: dict[str, str]):
+            return {
+                "topic_score": 80,
+                "category": "ai_news",
+                "viral_angle": "fast update",
+                "hook": "New model drop",
+                "audience": "builders",
+                "visual_style": "clean tech",
+                "content_plan": {
+                    "tiktok": {
+                        "seconds": 25,
+                        "hook": "Hook",
+                        "script": "Script",
+                        "storyboard": [{"t": 0, "duration": 5, "on_screen_text": "A", "voiceover": "B", "visual": "C", "broll": "D"}],
+                        "caption": "Cap",
+                        "hashtags": ["#ai"],
+                        "shot_list": ["Shot 1"],
+                        "broll_suggestions": ["Broll 1"],
+                    },
+                    "instagram": {
+                        "reel": {
+                            "seconds": 25,
+                            "hook": "Hook",
+                            "script": "Script",
+                            "storyboard": [{"t": 0, "duration": 5, "on_screen_text": "A", "voiceover": "B", "visual": "C", "broll": "D"}],
+                        },
+                        "caption": "Cap",
+                        "cta": "CTA",
+                        "hashtags": ["#ai"],
+                        "carousel": {"enabled": False, "slides": []},
+                    },
+                    "facebook": {
+                        "post_long": "Post",
+                        "cta": "CTA",
+                        "hashtags": ["#ai"],
+                        "video": {
+                            "seconds": 25,
+                            "hook": "Hook",
+                            "script": "Script",
+                            "storyboard": [{"t": 0, "duration": 5, "on_screen_text": "A", "voiceover": "B", "visual": "C", "broll": "D"}],
+                        },
+                    },
+                },
+            }
+
+    class _FakeHiggsfield:
+        def __init__(self, cfg):
+            pass
+
+        def render_video(self, *, video_spec: dict):
+            raise ApiCallError(
+                provider="higgsfield",
+                method="POST",
+                url="http://localhost:1234",
+                status_code=429,
+                message="quota exceeded",
+                request={"video_spec": {"version": "1"}},
+                response_text="{}",
+            )
+
+        def download_if_url(self, *, maybe_url: str, out_path: Path):
+            raise RuntimeError("should not be called")
+
+    monkeypatch.setattr(pmod, "XApiClient", _FakeX)
+    monkeypatch.setattr(pmod, "DeepSeekClient", _FakeDeepSeek)
+    monkeypatch.setattr(pmod, "HiggsfieldClient", _FakeHiggsfield)
+
+    s = load_settings()
+    db = Database(s.sqlite_path)
+    db.init()
+    run_once(settings=s, db=db)
+
+    with db.connect() as con:
+        job = con.execute("SELECT id, state FROM jobs LIMIT 1").fetchone()
+        assert job is not None
+        assert str(job["state"]) == "queued"
+        err = con.execute("SELECT provider, status_code, is_quota FROM api_errors WHERE provider = 'higgsfield' ORDER BY created_at DESC LIMIT 1").fetchone()
+        assert err is not None
+        assert int(err["status_code"]) == 429
+        assert int(err["is_quota"]) == 1

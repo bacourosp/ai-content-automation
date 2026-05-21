@@ -58,6 +58,40 @@ CREATE TABLE IF NOT EXISTS publish_queue (
 CREATE INDEX IF NOT EXISTS idx_publish_queue_status ON publish_queue(status);
 CREATE INDEX IF NOT EXISTS idx_publish_queue_job_id ON publish_queue(job_id);
 
+CREATE TABLE IF NOT EXISTS cost_events (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '',
+  asset_id TEXT NOT NULL DEFAULT '',
+  month_key TEXT NOT NULL,
+  cost_usd REAL NOT NULL,
+  units INTEGER NOT NULL DEFAULT 1,
+  details_json TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_events_month ON cost_events(provider, month_key);
+CREATE INDEX IF NOT EXISTS idx_cost_events_job ON cost_events(job_id);
+
+CREATE TABLE IF NOT EXISTS api_errors (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '',
+  asset_id TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL,
+  url TEXT NOT NULL,
+  status_code INTEGER,
+  message TEXT NOT NULL,
+  request_json TEXT NOT NULL DEFAULT '',
+  response_text TEXT NOT NULL DEFAULT '',
+  is_quota INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_errors_created ON api_errors(created_at);
+CREATE INDEX IF NOT EXISTS idx_api_errors_provider ON api_errors(provider);
+CREATE INDEX IF NOT EXISTS idx_api_errors_job ON api_errors(job_id);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
 """

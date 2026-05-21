@@ -40,7 +40,7 @@ class McpHttpClient:
         payload: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": method}
         if params is not None:
             payload["params"] = params
-        j = self._http.post_json(self._url, headers=self._headers(), payload=payload)
+        j = self._http.post_json(self._url, headers=self._headers(), payload=payload, provider="higgsfield")
         if isinstance(j, dict) and "error" in j:
             raise McpError(str(j["error"]))
         if not isinstance(j, dict) or "result" not in j:

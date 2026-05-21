@@ -10,6 +10,7 @@ from xai_automation.config.settings import Settings
 from xai_automation.connectors.publish_facebook import FacebookConfig, FacebookPublisher
 from xai_automation.connectors.publish_instagram import InstagramConfig, InstagramPublisher
 from xai_automation.connectors.publish_tiktok import TikTokConfig, TikTokPublisher
+from xai_automation.services.errors import ApiCallError
 from xai_automation.services.retry import retry
 from xai_automation.storage.repo import Repo
 
@@ -35,11 +36,16 @@ def process_queue(*, settings: Settings, repo: Repo, limit: int) -> int:
     ok = 0
     for it in items:
         qid = str(it["id"])
+        payload = json.loads(str(it.get("payload_json") or "{}"))
+        job_id = str(payload.get("job_id") or "")
+        asset_id = str(payload.get("video_asset_id") or "")
         try:
             _process_item(settings=settings, repo=repo, item=it)
             repo.update_publish_item(queue_id=qid, status="published", last_error="")
             ok += 1
         except Exception as e:
+            if isinstance(e, ApiCallError):
+                repo.log_api_error(job_id=job_id, asset_id=asset_id, err=e)
             repo.update_publish_item(queue_id=qid, attempts_inc=True, status="failed", last_error=str(e))
     return ok
 

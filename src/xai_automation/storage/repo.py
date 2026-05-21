@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from xai_automation.storage.db import Database
+from xai_automation.services.errors import ApiCallError, dumps_redacted
 
 
 def _utc_now_iso() -> str:
@@ -217,3 +218,112 @@ class Repo:
         with self._db.connect() as con:
             con.execute(q, tuple(args))
             con.commit()
+
+    def add_cost_event(
+        self,
+        *,
+        provider: str,
+        job_id: str,
+        asset_id: str,
+        month_key: str,
+        cost_usd: float,
+        units: int,
+        details: dict[str, Any] | None,
+    ) -> str:
+        cid = uuid.uuid4().hex
+        now = _utc_now_iso()
+        details_json = json.dumps(details or {}, ensure_ascii=False, separators=(",", ":"))
+        with self._db.connect() as con:
+            con.execute(
+                """
+                INSERT INTO cost_events(id, provider, job_id, asset_id, month_key, cost_usd, units, details_json, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (cid, provider, job_id, asset_id, month_key, float(cost_usd), int(units), details_json, now),
+            )
+            con.commit()
+        return cid
+
+    def get_monthly_cost_total(self, *, provider: str, month_key: str) -> float:
+        with self._db.connect() as con:
+            r = con.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events WHERE provider = ? AND month_key = ?",
+                (provider, month_key),
+            ).fetchone()
+            return 0.0 if r is None else float(r["total"] or 0.0)
+
+    def get_monthly_cost_units(self, *, provider: str, month_key: str) -> int:
+        with self._db.connect() as con:
+            r = con.execute(
+                "SELECT COALESCE(SUM(units), 0) as total FROM cost_events WHERE provider = ? AND month_key = ?",
+                (provider, month_key),
+            ).fetchone()
+            return 0 if r is None else int(r["total"] or 0)
+
+    def list_cost_events(self, *, provider: str, month_key: str, limit: int) -> list[dict[str, Any]]:
+        with self._db.connect() as con:
+            rows = con.execute(
+                "SELECT * FROM cost_events WHERE provider = ? AND month_key = ? ORDER BY created_at ASC LIMIT ?",
+                (provider, month_key, int(limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def log_api_error(self, *, job_id: str, asset_id: str, err: ApiCallError) -> str:
+        eid = uuid.uuid4().hex
+        now = _utc_now_iso()
+        req = "" if err.request is None else dumps_redacted(err.request)
+        resp = (err.response_text or "")[:20000]
+        with self._db.connect() as con:
+            con.execute(
+                """
+                INSERT INTO api_errors(id, provider, job_id, asset_id, method, url, status_code, message, request_json, response_text, is_quota, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    eid,
+                    err.provider,
+                    job_id,
+                    asset_id,
+                    err.method,
+                    err.url,
+                    err.status_code,
+                    (err.message or "")[:2000],
+                    req,
+                    resp,
+                    1 if err.is_quota else 0,
+                    now,
+                ),
+            )
+            con.commit()
+        return eid
+
+    def get_api_error(self, err_id: str) -> dict[str, Any]:
+        with self._db.connect() as con:
+            r = con.execute("SELECT * FROM api_errors WHERE id = ?", (err_id,)).fetchone()
+            if r is None:
+                raise KeyError(err_id)
+            return dict(r)
+
+    def list_api_errors(
+        self,
+        *,
+        limit: int,
+        provider: str | None = None,
+        job_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        q = "SELECT * FROM api_errors"
+        where: list[str] = []
+        args: list[Any] = []
+        if provider is not None and provider.strip() != "":
+            where.append("provider = ?")
+            args.append(provider)
+        if job_id is not None and job_id.strip() != "":
+            where.append("job_id = ?")
+            args.append(job_id)
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY created_at DESC LIMIT ?"
+        args.append(int(limit))
+        with self._db.connect() as con:
+            rows = con.execute(q, tuple(args)).fetchall()
+            return [dict(r) for r in rows]

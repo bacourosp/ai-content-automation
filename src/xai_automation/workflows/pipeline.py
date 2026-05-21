@@ -16,6 +16,7 @@ from xai_automation.mcp.higgsfield import (
 )
 from xai_automation.services.deepseek import DeepSeekClient, DeepSeekConfig, DeepSeekError, load_prompt
 from xai_automation.services.filtering import is_candidate_ai_post
+from xai_automation.services.errors import ApiCallError
 from xai_automation.services.retry import retry
 from xai_automation.storage.db import Database
 from xai_automation.storage.repo import PostIn, Repo
@@ -63,7 +64,11 @@ def _ingest_and_process(*, settings: Settings, repo: Repo) -> None:
     if "list" in srcs and settings.x_list_id.strip():
         k = f"x_list_since_id:{settings.x_list_id.strip()}"
         since_id = repo.get_kv(k)
-        posts, newest = x.fetch_list_tweets(list_id=settings.x_list_id.strip(), since_id=since_id, max_results=max_results)
+        try:
+            posts, newest = x.fetch_list_tweets(list_id=settings.x_list_id.strip(), since_id=since_id, max_results=max_results)
+        except ApiCallError as e:
+            repo.log_api_error(job_id="", asset_id="", err=e)
+            return
         if newest:
             repo.set_kv(k, newest)
         for p in posts:
@@ -73,9 +78,13 @@ def _ingest_and_process(*, settings: Settings, repo: Repo) -> None:
         for handle in settings.x_accounts[:50]:
             k = f"x_user_since_id:{handle.lstrip('@')}"
             since_id = repo.get_kv(k)
-            posts, newest, uid = x.fetch_user_tweets(
-                handle=handle, since_id=since_id, max_results=min(50, max_results), user_id_cache=user_id_cache
-            )
+            try:
+                posts, newest, uid = x.fetch_user_tweets(
+                    handle=handle, since_id=since_id, max_results=min(50, max_results), user_id_cache=user_id_cache
+                )
+            except ApiCallError as e:
+                repo.log_api_error(job_id="", asset_id="", err=e)
+                continue
             repo.set_kv(f"x_user_id:{handle.lstrip('@')}", uid)
             if newest:
                 repo.set_kv(k, newest)
@@ -86,7 +95,13 @@ def _ingest_and_process(*, settings: Settings, repo: Repo) -> None:
         q = build_ai_query(settings.x_include_keywords, settings.x_exclude_keywords, settings.x_language_hint)
         k = "x_search_since_id"
         since_id = repo.get_kv(k)
-        posts, newest = x.fetch_recent_search(query=q, since_id=since_id, max_results=max_results, languages=settings.x_language_hint)
+        try:
+            posts, newest = x.fetch_recent_search(
+                query=q, since_id=since_id, max_results=max_results, languages=settings.x_language_hint
+            )
+        except ApiCallError as e:
+            repo.log_api_error(job_id="", asset_id="", err=e)
+            return
         if newest:
             repo.set_kv(k, newest)
         for p in posts:
@@ -170,6 +185,10 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
 
     try:
         score_json = retry(_call_ds, max_attempts=settings.retry_max, backoff_seconds=settings.retry_backoff_seconds)
+    except ApiCallError as e:
+        repo.log_api_error(job_id=job_id, asset_id="", err=e)
+        repo.update_job(job_id=job_id, state="failed_deepseek", last_error=str(e))
+        return
     except DeepSeekError as e:
         repo.update_job(job_id=job_id, state="failed_deepseek", last_error=str(e))
         return
@@ -199,6 +218,21 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
 
     repo.update_job(job_id=job_id, state="video_planned")
 
+    month_key = datetime.now(timezone.utc).strftime("%Y-%m")
+    projected_cost = float(settings.higgsfield_cost_per_video_usd)
+    free_usd = float(settings.higgsfield_free_tier_monthly_usd)
+    free_videos = int(settings.higgsfield_free_tier_monthly_videos)
+    if free_usd > 0 and projected_cost > 0:
+        used = repo.get_monthly_cost_total(provider="higgsfield", month_key=month_key)
+        if used + projected_cost > free_usd:
+            repo.update_job(job_id=job_id, state="blocked_higgsfield_budget", last_error="higgsfield monthly cost limit reached")
+            return
+    if free_videos > 0:
+        used_units = repo.get_monthly_cost_units(provider="higgsfield", month_key=month_key)
+        if used_units + 1 > free_videos:
+            repo.update_job(job_id=job_id, state="blocked_higgsfield_budget", last_error="higgsfield monthly video limit reached")
+            return
+
     render_out = {}
     if settings.higgsfield_mcp_url.strip() and settings.higgsfield_api_key.strip():
         try:
@@ -207,6 +241,10 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
                 max_attempts=settings.retry_max,
                 backoff_seconds=settings.retry_backoff_seconds,
             )
+        except ApiCallError as e:
+            repo.log_api_error(job_id=job_id, asset_id="", err=e)
+            repo.update_job(job_id=job_id, state="failed_higgsfield", last_error=str(e))
+            render_out = {}
         except Exception as e:
             repo.update_job(job_id=job_id, state="failed_higgsfield", last_error=str(e))
             render_out = {}
@@ -226,17 +264,30 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
             video_path = settings.assets_dir / job_id / "video.mp4"
             try:
                 higgsfield.download_if_url(maybe_url=maybe_url, out_path=video_path)
+            except ApiCallError as e:
+                repo.log_api_error(job_id=job_id, asset_id="", err=e)
+                video_path = None
             except Exception:
                 video_path = None
 
+    video_asset_id = ""
     if video_path is not None and video_path.exists():
-        repo.add_asset(job_id=job_id, kind="video", platform="master", path=video_path)
+        video_asset_id = repo.add_asset(job_id=job_id, kind="video", platform="master", path=video_path)
         hosted_video_path = settings.output_dir / "assets" / job_id / "video.mp4"
         hosted_video_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copyfile(video_path, hosted_video_path)
         except Exception:
             pass
+        repo.add_cost_event(
+            provider="higgsfield",
+            job_id=job_id,
+            asset_id=video_asset_id,
+            month_key=month_key,
+            cost_usd=float(settings.higgsfield_cost_per_video_usd),
+            units=1,
+            details={"video_url": maybe_url, "kind": "video_render"},
+        )
         repo.update_job(job_id=job_id, state="video_rendered", last_error="")
     else:
         repo.update_job(job_id=job_id, state="video_missing", last_error="")
@@ -247,16 +298,32 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
     repo.add_asset(job_id=job_id, kind="content_bundle", platform="all", path=bundle_path)
 
     approval_status = "awaiting_approval" if settings.require_approval else "queued"
-    repo.enqueue_publish(job_id=job_id, platform="tiktok", payload=_build_publish_payload(score_json, job_id, settings), status=approval_status)
-    repo.enqueue_publish(job_id=job_id, platform="instagram", payload=_build_publish_payload(score_json, job_id, settings), status=approval_status)
-    repo.enqueue_publish(job_id=job_id, platform="facebook", payload=_build_publish_payload(score_json, job_id, settings), status=approval_status)
+    repo.enqueue_publish(
+        job_id=job_id,
+        platform="tiktok",
+        payload=_build_publish_payload(score_json, job_id, settings, video_asset_id),
+        status=approval_status,
+    )
+    repo.enqueue_publish(
+        job_id=job_id,
+        platform="instagram",
+        payload=_build_publish_payload(score_json, job_id, settings, video_asset_id),
+        status=approval_status,
+    )
+    repo.enqueue_publish(
+        job_id=job_id,
+        platform="facebook",
+        payload=_build_publish_payload(score_json, job_id, settings, video_asset_id),
+        status=approval_status,
+    )
 
     repo.update_job(job_id=job_id, state="queued")
 
 
-def _build_publish_payload(score_json: dict, job_id: str, settings: Settings) -> dict:
+def _build_publish_payload(score_json: dict, job_id: str, settings: Settings, video_asset_id: str) -> dict:
     return {
         "job_id": job_id,
+        "video_asset_id": video_asset_id,
         "topic_score": int(score_json.get("topic_score", 0)),
         "category": str(score_json.get("category") or ""),
         "viral_angle": str(score_json.get("viral_angle") or ""),

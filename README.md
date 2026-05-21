@@ -98,6 +98,32 @@ Sin red (solo valida variables):
 xai-automation preflight --no-network
 ```
 
+## Costos y logs
+
+Variables opcionales para control de capa gratuita de Higgsfield:
+
+- `HIGGSFIELD_COST_PER_VIDEO_USD=0.0`
+- `HIGGSFIELD_FREE_TIER_MONTHLY_USD=0.0` (0 = deshabilitado)
+- `HIGGSFIELD_FREE_TIER_MONTHLY_VIDEOS=0` (0 = deshabilitado)
+
+Ver costos del mes (acumulado + eventos):
+
+```bash
+xai-automation costs
+```
+
+Listar errores de APIs (persistidos en SQLite):
+
+```bash
+xai-automation errors --limit 50
+```
+
+Ver detalle de un error:
+
+```bash
+xai-automation error --id <ERROR_ID>
+```
+
 ## Cola de publicación
 
 - Si `REQUIRE_APPROVAL=true`, el ciclo deja items en `awaiting_approval`.

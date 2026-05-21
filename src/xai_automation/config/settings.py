@@ -12,6 +12,12 @@ def _as_int(value: str | None, default: int) -> int:
     return int(value)
 
 
+def _as_float(value: str | None, default: float) -> float:
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
 def _as_bool(value: str | None, default: bool) -> bool:
     if value is None or value == "":
         return default
@@ -53,6 +59,9 @@ class Settings:
     higgsfield_api_key_id: str
     higgsfield_api_key_secret: str
     higgsfield_timeout_seconds: int
+    higgsfield_cost_per_video_usd: float
+    higgsfield_free_tier_monthly_usd: float
+    higgsfield_free_tier_monthly_videos: int
 
     tiktok_access_token: str
     tiktok_refresh_token: str
@@ -110,6 +119,9 @@ class Settings:
             "ASSETS_DIR": str(self.assets_dir),
             "ASSET_SERVER_PORT": str(self.asset_server_port),
             "LOG_LEVEL": self.log_level,
+            "HIGGSFIELD_COST_PER_VIDEO_USD": str(self.higgsfield_cost_per_video_usd),
+            "HIGGSFIELD_FREE_TIER_MONTHLY_USD": str(self.higgsfield_free_tier_monthly_usd),
+            "HIGGSFIELD_FREE_TIER_MONTHLY_VIDEOS": str(self.higgsfield_free_tier_monthly_videos),
         }
 
 
@@ -146,6 +158,9 @@ def load_settings() -> Settings:
         higgsfield_api_key_id=env("HIGGSFIELD_API_KEY_ID", "") or "",
         higgsfield_api_key_secret=env("HIGGSFIELD_API_KEY_SECRET", "") or "",
         higgsfield_timeout_seconds=_as_int(env("HIGGSFIELD_TIMEOUT_SECONDS", "900"), 900),
+        higgsfield_cost_per_video_usd=_as_float(env("HIGGSFIELD_COST_PER_VIDEO_USD", "0"), 0.0),
+        higgsfield_free_tier_monthly_usd=_as_float(env("HIGGSFIELD_FREE_TIER_MONTHLY_USD", "0"), 0.0),
+        higgsfield_free_tier_monthly_videos=_as_int(env("HIGGSFIELD_FREE_TIER_MONTHLY_VIDEOS", "0"), 0),
         tiktok_access_token=env("TIKTOK_ACCESS_TOKEN", "") or "",
         tiktok_refresh_token=env("TIKTOK_REFRESH_TOKEN", "") or "",
         tiktok_client_key=env("TIKTOK_CLIENT_KEY", "") or "",

@@ -52,7 +52,7 @@ class HiggsfieldClient:
         u = (maybe_url or "").strip()
         if not (u.startswith("http://") or u.startswith("https://")):
             raise HiggsfieldError("not a url")
-        self._http.download_to_file(u, out_path=out_path)
+        self._http.download_to_file(u, out_path=out_path, provider="higgsfield")
         return out_path
 
 

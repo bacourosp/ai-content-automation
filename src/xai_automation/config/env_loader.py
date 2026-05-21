@@ -10,16 +10,20 @@ def load_dotenv_best_effort() -> list[Path]:
     loaded: list[Path] = []
 
     explicit = os.environ.get("XAI_ENV_FILE", "").strip()
+    is_pytest = "PYTEST_CURRENT_TEST" in os.environ
     candidates: list[Path] = []
     if explicit:
         candidates.append(Path(explicit))
-
-    candidates.extend([
-        Path.cwd() / ".env",
-        Path.cwd().parent / ".env",
-        Path("/etc/xai-automation/xai.env"),
-        Path.home() / ".config" / "xai-automation" / "xai.env",
-    ])
+    else:
+        if not is_pytest:
+            candidates.extend(
+                [
+                    Path.cwd() / ".env",
+                    Path.cwd().parent / ".env",
+                    Path("/etc/xai-automation/xai.env"),
+                    Path.home() / ".config" / "xai-automation" / "xai.env",
+                ]
+            )
 
     for p in candidates:
         if p.exists():

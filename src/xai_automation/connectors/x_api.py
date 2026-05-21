@@ -37,7 +37,7 @@ class XApiClient:
     def _resolve_user_id(self, handle: str) -> str:
         u = handle.lstrip("@")
         url = f"{self._base}/users/by/username/{u}"
-        j = self._http.get_json(url, headers=self._headers())
+        j = self._http.get_json(url, headers=self._headers(), provider="x")
         return str(j["data"]["id"])
 
     def fetch_recent_search(
@@ -59,7 +59,7 @@ class XApiClient:
         }
         if since_id:
             params["since_id"] = since_id
-        j = self._http.get_json(url, headers=self._headers(), params=params)
+        j = self._http.get_json(url, headers=self._headers(), params=params, provider="x")
         posts = _parse_tweets(j, base_url="https://x.com")
         newest = _newest_id(posts)
         return posts, newest
@@ -80,7 +80,7 @@ class XApiClient:
         }
         if since_id:
             params["since_id"] = since_id
-        j = self._http.get_json(url, headers=self._headers(), params=params)
+        j = self._http.get_json(url, headers=self._headers(), params=params, provider="x")
         posts = _parse_tweets(j, base_url="https://x.com")
         newest = _newest_id(posts)
         return posts, newest
@@ -106,7 +106,7 @@ class XApiClient:
         }
         if since_id:
             params["since_id"] = since_id
-        j = self._http.get_json(url, headers=self._headers(), params=params)
+        j = self._http.get_json(url, headers=self._headers(), params=params, provider="x")
         posts: list[XPost] = []
         data = j.get("data") or []
         for t in data:

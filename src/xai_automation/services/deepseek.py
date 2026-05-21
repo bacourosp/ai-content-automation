@@ -46,7 +46,7 @@ class DeepSeekClient:
         }
         url = f"{self._base}/chat/completions"
         headers = {"Authorization": f"Bearer {self._cfg.api_key}"}
-        j = self._http.post_json(url, headers=headers, payload=payload)
+        j = self._http.post_json(url, headers=headers, payload=payload, provider="deepseek")
         try:
             txt = j["choices"][0]["message"]["content"]
         except Exception as e:
@@ -69,7 +69,7 @@ class DeepSeekClient:
         }
         url = f"{self._base}/chat/completions"
         headers = {"Authorization": f"Bearer {self._cfg.api_key}"}
-        j = self._http.post_json(url, headers=headers, payload=payload)
+        j = self._http.post_json(url, headers=headers, payload=payload, provider="deepseek")
         try:
             txt = j["choices"][0]["message"]["content"]
         except Exception as e:

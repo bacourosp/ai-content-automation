@@ -11,10 +11,9 @@ def test_deepseek_ping_parses_minimal_json(monkeypatch) -> None:
     )
     c = DeepSeekClient(cfg)
 
-    def _fake_post_json(url, headers, payload):
+    def _fake_post_json(url, headers, payload, **kwargs):
         return {"choices": [{"message": {"content": "{\"ok\":true}"}}]}
 
     monkeypatch.setattr(c._http, "post_json", _fake_post_json)
     out = c.ping()
     assert out["ok"] is True
-

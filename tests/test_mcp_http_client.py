@@ -6,7 +6,7 @@ def test_mcp_list_tools_parses_tools(monkeypatch) -> None:
 
     calls = []
 
-    def _fake_post_json(url, headers, payload):
+    def _fake_post_json(url, headers, payload, **kwargs):
         calls.append(payload["method"])
         if payload["method"] == "initialize":
             return {"jsonrpc": "2.0", "id": payload["id"], "result": {}}
@@ -22,4 +22,3 @@ def test_mcp_list_tools_parses_tools(monkeypatch) -> None:
     tools = c.list_tools()
     assert calls[0] == "initialize"
     assert tools[0].name == "higgsfield.render"
-
