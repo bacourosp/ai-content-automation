@@ -51,6 +51,16 @@ class ApiCallError(RuntimeError):
     request: dict[str, Any] | None
     response_text: str | None
 
+    def __post_init__(self) -> None:
+        RuntimeError.__init__(self, self._format())
+
+    def _format(self) -> str:
+        sc = "" if self.status_code is None else f"{self.status_code} "
+        return f"{self.provider} {self.method} {self.url} {sc}{self.message}".strip()
+
+    def __str__(self) -> str:
+        return self._format()
+
     @property
     def is_quota(self) -> bool:
         return is_quota_or_limit_error(status_code=self.status_code, message=self.message)

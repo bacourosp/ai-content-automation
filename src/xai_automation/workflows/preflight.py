@@ -9,6 +9,7 @@ from xai_automation.config.settings import Settings
 from xai_automation.connectors.x_api import XApiClient, build_ai_query
 from xai_automation.mcp.http_client import McpHttpClient
 from xai_automation.services.deepseek import DeepSeekClient, DeepSeekConfig
+from xai_automation.services.gemini import GeminiClient, GeminiConfig
 from xai_automation.storage.repo import Repo
 
 
@@ -28,8 +29,13 @@ class CheckResult:
 def run_preflight(*, settings: Settings, network: bool = True, repo: Repo | None = None) -> dict[str, Any]:
     checks: dict[str, CheckResult] = {}
 
-    checks["env.nvidia_api_key"] = _req(settings.nvidia_api_key, "NVIDIA_API_KEY")
-    checks["env.deepseek_model"] = _req(settings.deepseek_model, "DEEPSEEK_MODEL")
+    checks["env.llm_provider"] = _req(settings.llm_provider, "LLM_PROVIDER")
+    if settings.llm_provider == "gemini":
+        checks["env.gemini_api_key"] = _req(settings.gemini_api_key, "GEMINI_API_KEY")
+        checks["env.gemini_model"] = _req(settings.gemini_model, "GEMINI_MODEL")
+    else:
+        checks["env.nvidia_api_key"] = _req(settings.nvidia_api_key, "NVIDIA_API_KEY")
+        checks["env.deepseek_model"] = _req(settings.deepseek_model, "DEEPSEEK_MODEL")
     checks["env.x_bearer_token"] = _req(settings.x_bearer_token, "X_BEARER_TOKEN")
     checks["env.higgsfield_mcp_url"] = _req(settings.higgsfield_mcp_url, "HIGGSFIELD_MCP_URL")
     checks["env.higgsfield_api_key"] = _req(settings.higgsfield_api_key, "HIGGSFIELD_API_KEY")
@@ -57,10 +63,16 @@ def run_preflight(*, settings: Settings, network: bool = True, repo: Repo | None
     else:
         checks["net.x_api"] = CheckResult(ok=False, level="error", message="omitido: falta X_BEARER_TOKEN")
 
-    if checks["env.nvidia_api_key"].ok and checks["env.deepseek_model"].ok:
-        checks["net.deepseek"] = _check_deepseek(settings)
+    if settings.llm_provider == "gemini":
+        if checks["env.gemini_api_key"].ok and checks["env.gemini_model"].ok:
+            checks["net.gemini"] = _check_gemini(settings)
+        else:
+            checks["net.gemini"] = CheckResult(ok=False, level="error", message="omitido: falta GEMINI_API_KEY/GEMINI_MODEL")
     else:
-        checks["net.deepseek"] = CheckResult(ok=False, level="error", message="omitido: falta NVIDIA_API_KEY/DEEPSEEK_MODEL")
+        if checks["env.nvidia_api_key"].ok and checks["env.deepseek_model"].ok:
+            checks["net.deepseek"] = _check_deepseek(settings)
+        else:
+            checks["net.deepseek"] = CheckResult(ok=False, level="error", message="omitido: falta NVIDIA_API_KEY/DEEPSEEK_MODEL")
 
     if checks["env.higgsfield_mcp_url"].ok and checks["env.higgsfield_api_key"].ok:
         checks["net.higgsfield_mcp"] = _check_higgsfield(settings)
@@ -99,6 +111,15 @@ def _check_deepseek(settings: Settings) -> CheckResult:
         )
         ds.ping()
         return CheckResult(ok=True, level="ok", message="ok (chat/completions ping)")
+    except Exception as e:
+        return CheckResult(ok=False, level="error", message=f"failed: {str(e)[:300]}")
+
+
+def _check_gemini(settings: Settings) -> CheckResult:
+    try:
+        c = GeminiClient(GeminiConfig(api_key=settings.gemini_api_key, model=settings.gemini_model, timeout_seconds=min(20, settings.timeout_seconds_deepseek)))
+        c.ping()
+        return CheckResult(ok=True, level="ok", message="ok (gemini generateContent ping)")
     except Exception as e:
         return CheckResult(ok=False, level="error", message=f"failed: {str(e)[:300]}")
 

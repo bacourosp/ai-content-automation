@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from xai_automation.services.errors import ApiCallError
+from xai_automation.services.http import HttpClient
 
 
 log = logging.getLogger("xai_automation.publish_tiktok")
+
+# Terminal statuses for the Content Posting API status/fetch endpoint.
+_SUCCESS_STATUSES = {"PUBLISH_COMPLETE", "SEND_TO_USER_INBOX"}
+_FAILURE_STATUSES = {"FAILED"}
 
 
 @dataclass(frozen=True)
@@ -24,36 +27,49 @@ class TikTokPublisher:
     def __init__(self, cfg: TikTokConfig, *, timeout_seconds: int):
         self._cfg = cfg
         self._timeout = timeout_seconds
+        self._http = HttpClient(timeout_seconds=timeout_seconds)
 
-    def init_video_publish(self, *, title: str, video_bytes: int) -> dict[str, Any]:
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._cfg.access_token}"}
+
+    def _require_token(self, *, method: str, url: str) -> None:
         if self._cfg.access_token.strip() == "":
             raise ApiCallError(
                 provider="tiktok",
-                method="POST",
-                url=self._cfg.api_base.rstrip("/") + "/v2/post/publish/video/init/",
+                method=method,
+                url=url,
                 status_code=None,
                 message="missing tiktok access token",
                 request=None,
                 response_text=None,
             )
+
+    def init_video_publish(self, *, title: str, video_bytes: int) -> dict[str, Any]:
         url = f"{self._cfg.api_base.rstrip('/')}/v2/post/publish/video/init/"
+        self._require_token(method="POST", url=url)
+        size = int(video_bytes)
         payload = {
             "post_info": {"title": title[:90]},
-            "source_info": {"source": "FILE_UPLOAD", "video_size": int(video_bytes), "chunk_size": int(video_bytes), "total_chunk_count": 1},
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": size,
+                "chunk_size": size,
+                "total_chunk_count": 1,
+            },
         }
-        headers = {"Authorization": f"Bearer {self._cfg.access_token}", "Content-Type": "application/json"}
-        r = requests.post(url, headers=headers, data=json.dumps(payload, separators=(",", ":"), ensure_ascii=False), timeout=self._timeout)
-        if r.status_code >= 400:
+        j = self._http.post_json(url, headers=self._headers(), payload=payload, provider="tiktok")
+        data = j.get("data") if isinstance(j, dict) else None
+        if not isinstance(data, dict) or not str(data.get("upload_url") or "") or not str(data.get("publish_id") or ""):
             raise ApiCallError(
                 provider="tiktok",
                 method="POST",
                 url=url,
-                status_code=int(r.status_code),
-                message=f"{r.status_code} {r.text[:500]}",
-                request={"headers": headers, "payload": payload},
-                response_text=r.text,
+                status_code=None,
+                message=f"init response missing data.upload_url/publish_id: {j}",
+                request={"payload": payload},
+                response_text=None,
             )
-        return r.json()
+        return j
 
     def upload_video(self, *, upload_url: str, video_path: Path) -> None:
         if not video_path.exists():
@@ -66,33 +82,45 @@ class TikTokPublisher:
                 request={"video_path": str(video_path)},
                 response_text=None,
             )
-        with video_path.open("rb") as f:
-            data = f.read()
-        r = requests.put(upload_url, data=data, timeout=self._timeout)
-        if r.status_code >= 400:
-            raise ApiCallError(
-                provider="tiktok",
-                method="PUT",
-                url=upload_url,
-                status_code=int(r.status_code),
-                message=f"upload failed: {r.status_code} {r.text[:200]}",
-                request={"bytes": len(data)},
-                response_text=r.text,
-            )
+        data = video_path.read_bytes()
+        size = len(data)
+        headers = {
+            "Content-Type": "video/mp4",
+            "Content-Range": f"bytes 0-{size - 1}/{size}",
+        }
+        self._http.put_bytes(upload_url, data=data, headers=headers, provider="tiktok")
 
     def fetch_publish_status(self, *, publish_id: str) -> dict[str, Any]:
         url = f"{self._cfg.api_base.rstrip('/')}/v2/post/publish/status/fetch/"
+        self._require_token(method="POST", url=url)
         payload = {"publish_id": publish_id}
-        headers = {"Authorization": f"Bearer {self._cfg.access_token}", "Content-Type": "application/json"}
-        r = requests.post(url, headers=headers, data=json.dumps(payload, separators=(",", ":"), ensure_ascii=False), timeout=self._timeout)
-        if r.status_code >= 400:
-            raise ApiCallError(
-                provider="tiktok",
-                method="POST",
-                url=url,
-                status_code=int(r.status_code),
-                message=f"{r.status_code} {r.text[:500]}",
-                request={"headers": headers, "payload": payload},
-                response_text=r.text,
-            )
-        return r.json()
+        return self._http.post_json(url, headers=self._headers(), payload=payload, provider="tiktok")
+
+    def poll_until_done(self, *, publish_id: str, max_attempts: int = 20, interval_seconds: int = 5) -> dict[str, Any]:
+        last: dict[str, Any] = {}
+        for _ in range(max(1, max_attempts)):
+            last = self.fetch_publish_status(publish_id=publish_id)
+            data = last.get("data") if isinstance(last, dict) else None
+            status = str((data or {}).get("status") or "")
+            if status in _SUCCESS_STATUSES:
+                return last
+            if status in _FAILURE_STATUSES:
+                raise ApiCallError(
+                    provider="tiktok",
+                    method="POST",
+                    url=f"{self._cfg.api_base.rstrip('/')}/v2/post/publish/status/fetch/",
+                    status_code=None,
+                    message=f"tiktok publish failed: {data}",
+                    request={"publish_id": publish_id},
+                    response_text=None,
+                )
+            time.sleep(interval_seconds)
+        raise ApiCallError(
+            provider="tiktok",
+            method="POST",
+            url=f"{self._cfg.api_base.rstrip('/')}/v2/post/publish/status/fetch/",
+            status_code=None,
+            message=f"tiktok publish status not terminal after polling: {last}",
+            request={"publish_id": publish_id},
+            response_text=None,
+        )

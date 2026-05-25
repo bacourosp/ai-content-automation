@@ -16,6 +16,23 @@ class DeepSeekError(RuntimeError):
     pass
 
 
+VALID_CATEGORIES = frozenset(
+    {
+        "ai_news",
+        "launches",
+        "model_releases",
+        "viral_ai_content",
+        "research",
+        "startups",
+        "tools",
+        "controversies",
+        "spam",
+    }
+)
+
+MAX_VIDEO_SECONDS = 600
+
+
 @dataclass(frozen=True)
 class DeepSeekConfig:
     api_key: str
@@ -142,6 +159,27 @@ def _require_obj(d: dict[str, Any], k: str) -> dict[str, Any]:
     return v
 
 
+def _require_seconds(d: dict[str, Any], k: str) -> int:
+    v = _require_int(d, k)
+    if v < 0 or v > MAX_VIDEO_SECONDS:
+        raise DeepSeekError(f"{k} out of range (0..{MAX_VIDEO_SECONDS})")
+    return v
+
+
+def _validate_carousel_slides(slides: Any, *, path: str) -> None:
+    if not isinstance(slides, list):
+        raise DeepSeekError(f"{path} must be list")
+    for i, slide in enumerate(slides[:20]):
+        if not isinstance(slide, dict):
+            raise DeepSeekError(f"{path}[{i}] must be object")
+        if not isinstance(slide.get("title"), str):
+            raise DeepSeekError(f"{path}[{i}].title must be string")
+        if not isinstance(slide.get("bullets"), list):
+            raise DeepSeekError(f"{path}[{i}].bullets must be list")
+        if not isinstance(slide.get("footer"), str):
+            raise DeepSeekError(f"{path}[{i}].footer must be string")
+
+
 def _validate_storyboard(sb: Any, *, path: str) -> None:
     if not isinstance(sb, list) or not sb:
         raise DeepSeekError(f"{path} must be non-empty list")
@@ -161,7 +199,9 @@ def _validate_score_schema(root: dict[str, Any]) -> None:
     score = _require_int(root, "topic_score")
     if score < 0 or score > 100:
         raise DeepSeekError("topic_score out of range")
-    _require_str(root, "category")
+    category = _require_str(root, "category")
+    if category not in VALID_CATEGORIES:
+        raise DeepSeekError(f"category must be one of {sorted(VALID_CATEGORIES)}")
     _require_str(root, "viral_angle")
     _require_str(root, "hook")
     _require_str(root, "audience")
@@ -170,7 +210,7 @@ def _validate_score_schema(root: dict[str, Any]) -> None:
     cp = _require_obj(root, "content_plan")
 
     tt = _require_obj(cp, "tiktok")
-    _require_int(tt, "seconds")
+    _require_seconds(tt, "seconds")
     _require_str(tt, "hook")
     _require_str(tt, "script")
     _validate_storyboard(tt.get("storyboard"), path="content_plan.tiktok.storyboard")
@@ -181,7 +221,7 @@ def _validate_score_schema(root: dict[str, Any]) -> None:
 
     ig = _require_obj(cp, "instagram")
     reel = _require_obj(ig, "reel")
-    _require_int(reel, "seconds")
+    _require_seconds(reel, "seconds")
     _require_str(reel, "hook")
     _require_str(reel, "script")
     _validate_storyboard(reel.get("storyboard"), path="content_plan.instagram.reel.storyboard")
@@ -191,16 +231,14 @@ def _validate_score_schema(root: dict[str, Any]) -> None:
     carousel = _require_obj(ig, "carousel")
     if not isinstance(carousel.get("enabled"), bool):
         raise DeepSeekError("content_plan.instagram.carousel.enabled must be bool")
-    slides = carousel.get("slides")
-    if not isinstance(slides, list):
-        raise DeepSeekError("content_plan.instagram.carousel.slides must be list")
+    _validate_carousel_slides(carousel.get("slides"), path="content_plan.instagram.carousel.slides")
 
     fb = _require_obj(cp, "facebook")
     _require_str(fb, "post_long")
     _require_str(fb, "cta")
     _require_list(fb, "hashtags")
     fbv = _require_obj(fb, "video")
-    _require_int(fbv, "seconds")
+    _require_seconds(fbv, "seconds")
     _require_str(fbv, "hook")
     _require_str(fbv, "script")
     _validate_storyboard(fbv.get("storyboard"), path="content_plan.facebook.video.storyboard")

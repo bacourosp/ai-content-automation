@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
+from typing import Any
 
 from xai_automation.config.settings import Settings
 from xai_automation.connectors.x_api import XApiClient, build_ai_query
@@ -14,9 +15,11 @@ from xai_automation.mcp.higgsfield import (
     build_video_spec_from_storyboard,
     dump_video_spec,
 )
+from xai_automation.mcp.render import build_render_provider
 from xai_automation.services.deepseek import DeepSeekClient, DeepSeekConfig, DeepSeekError, load_prompt
 from xai_automation.services.filtering import is_candidate_ai_post
 from xai_automation.services.errors import ApiCallError
+from xai_automation.services.gemini import GeminiClient, GeminiConfig
 from xai_automation.services.retry import retry
 from xai_automation.storage.db import Database
 from xai_automation.storage.repo import PostIn, Repo
@@ -133,27 +136,40 @@ def _ingest_and_process(*, settings: Settings, repo: Repo) -> None:
 
     prompt_path = Path(__file__).resolve().parents[1] / "prompts" / "deepseek_score_v1.txt"
     prompt = load_prompt(prompt_path)
-    ds = DeepSeekClient(
-        DeepSeekConfig(
-            api_key=settings.nvidia_api_key,
-            base_url=settings.nvidia_api_base_url,
-            model=settings.deepseek_model,
-            timeout_seconds=settings.timeout_seconds_deepseek,
-            max_output_tokens=settings.max_model_output_tokens,
+    ds: Any
+    if settings.llm_provider == "gemini":
+        ds = GeminiClient(
+            GeminiConfig(
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                timeout_seconds=settings.timeout_seconds_deepseek,
+                max_output_tokens=settings.max_model_output_tokens,
+                thinking_budget=settings.gemini_thinking_budget,
+            )
         )
-    )
-
-    hf = HiggsfieldClient(
-        HiggsfieldConfig(
-            mcp_url=settings.higgsfield_mcp_url,
-            api_key=settings.higgsfield_api_key,
-            timeout_seconds=settings.higgsfield_timeout_seconds,
-            tool_name=settings.higgsfield_tool_name,
+    else:
+        ds = DeepSeekClient(
+            DeepSeekConfig(
+                api_key=settings.nvidia_api_key,
+                base_url=settings.nvidia_api_base_url,
+                model=settings.deepseek_model,
+                timeout_seconds=settings.timeout_seconds_deepseek,
+                max_output_tokens=settings.max_model_output_tokens,
+            )
         )
-    )
 
-    for jid in created_jobs[: settings.max_posts_per_tick]:
-        _process_job(settings=settings, repo=repo, deepseek=ds, higgsfield=hf, job_id=jid)
+    renderer, renderer_err = _build_renderer(settings)
+
+    try:
+        for jid in created_jobs[: settings.max_posts_per_tick]:
+            _process_job(settings=settings, repo=repo, deepseek=ds, renderer=renderer, renderer_err=renderer_err, job_id=jid, prompt=prompt)
+    finally:
+        closer = getattr(renderer, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                pass
 
     if not settings.require_approval:
         from xai_automation.workflows.publish_queue import process_queue
@@ -161,7 +177,59 @@ def _ingest_and_process(*, settings: Settings, repo: Repo) -> None:
         process_queue(settings=settings, repo=repo, limit=settings.max_posts_per_tick)
 
 
-def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, higgsfield: HiggsfieldClient, job_id: str) -> None:
+def _build_renderer(settings: Settings) -> tuple[Any, str]:
+    """Build the configured render provider. Returns (client_or_None, error_msg).
+
+    Higgsfield keeps its dedicated client (so the module-level `HiggsfieldClient`
+    binding stays stub-able in tests). Other providers come from the registry.
+    """
+    if settings.render_provider == "higgsfield":
+        return (
+            HiggsfieldClient(
+                HiggsfieldConfig(
+                    mcp_url=settings.higgsfield_mcp_url,
+                    api_key=settings.higgsfield_api_key,
+                    timeout_seconds=settings.higgsfield_timeout_seconds,
+                    tool_name=settings.higgsfield_tool_name,
+                    arg_name=settings.higgsfield_arg_name,
+                )
+            ),
+            "",
+        )
+    try:
+        return build_render_provider(settings), ""
+    except Exception as e:  # misconfigured alt provider: fail jobs cleanly, don't crash the tick
+        return None, str(e)
+
+
+def _render_provider_configured(settings: Settings) -> bool:
+    p = settings.render_provider
+    if p == "higgsfield":
+        return bool(settings.higgsfield_mcp_url.strip() and settings.higgsfield_api_key.strip())
+    if p == "glif":
+        return bool(settings.glif_api_token.strip() and settings.glif_render_id.strip())
+    if p == "remotion_media":
+        return bool(settings.kie_api_key.strip())
+    if p == "remotion_app":
+        return bool(settings.remotion_app_mcp_url.strip())
+    return bool(settings.render_mcp_url.strip())
+
+
+def _render_cost_config(settings: Settings) -> tuple[float, float, int]:
+    if settings.render_provider == "higgsfield":
+        return (
+            float(settings.higgsfield_cost_per_video_usd),
+            float(settings.higgsfield_free_tier_monthly_usd),
+            int(settings.higgsfield_free_tier_monthly_videos),
+        )
+    return (
+        float(settings.render_cost_per_video_usd),
+        float(settings.render_free_tier_monthly_usd),
+        int(settings.render_free_tier_monthly_videos),
+    )
+
+
+def _process_job(*, settings: Settings, repo: Repo, deepseek: Any, renderer: Any, renderer_err: str, job_id: str, prompt: str) -> None:
     job = repo.get_job_post(job_id)
     if job is None:
         return
@@ -181,7 +249,7 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
 
     def _call_ds() -> dict:
         repo.update_job(job_id=job_id, attempts_inc=True)
-        return deepseek.score_post(prompt=load_prompt(Path(__file__).resolve().parents[1] / "prompts" / "deepseek_score_v1.txt"), post_payload=post_payload)
+        return deepseek.score_post(prompt=prompt, post_payload=post_payload)
 
     try:
         score_json = retry(_call_ds, max_attempts=settings.retry_max, backoff_seconds=settings.retry_backoff_seconds)
@@ -218,38 +286,37 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
 
     repo.update_job(job_id=job_id, state="video_planned")
 
+    provider = settings.render_provider
     month_key = datetime.now(timezone.utc).strftime("%Y-%m")
-    projected_cost = float(settings.higgsfield_cost_per_video_usd)
-    free_usd = float(settings.higgsfield_free_tier_monthly_usd)
-    free_videos = int(settings.higgsfield_free_tier_monthly_videos)
+    projected_cost, free_usd, free_videos = _render_cost_config(settings)
     if free_usd > 0 and projected_cost > 0:
-        used = repo.get_monthly_cost_total(provider="higgsfield", month_key=month_key)
+        used = repo.get_monthly_cost_total(provider=provider, month_key=month_key)
         if used + projected_cost > free_usd:
-            repo.update_job(job_id=job_id, state="blocked_higgsfield_budget", last_error="higgsfield monthly cost limit reached")
+            repo.update_job(job_id=job_id, state=f"blocked_{provider}_budget", last_error=f"{provider} monthly cost limit reached")
             return
     if free_videos > 0:
-        used_units = repo.get_monthly_cost_units(provider="higgsfield", month_key=month_key)
+        used_units = repo.get_monthly_cost_units(provider=provider, month_key=month_key)
         if used_units + 1 > free_videos:
-            repo.update_job(job_id=job_id, state="blocked_higgsfield_budget", last_error="higgsfield monthly video limit reached")
+            repo.update_job(job_id=job_id, state=f"blocked_{provider}_budget", last_error=f"{provider} monthly video limit reached")
             return
 
-    render_out = {}
-    if settings.higgsfield_mcp_url.strip() and settings.higgsfield_api_key.strip():
+    render_out: dict[str, Any] = {}
+    if renderer is not None and _render_provider_configured(settings):
         try:
             render_out = retry(
-                lambda: higgsfield.render_video(video_spec=video_spec),
+                lambda: renderer.render_video(video_spec=video_spec),
                 max_attempts=settings.retry_max,
                 backoff_seconds=settings.retry_backoff_seconds,
             )
         except ApiCallError as e:
             repo.log_api_error(job_id=job_id, asset_id="", err=e)
-            repo.update_job(job_id=job_id, state="failed_higgsfield", last_error=str(e))
+            repo.update_job(job_id=job_id, state=f"failed_{provider}", last_error=str(e))
             render_out = {}
         except Exception as e:
-            repo.update_job(job_id=job_id, state="failed_higgsfield", last_error=str(e))
+            repo.update_job(job_id=job_id, state=f"failed_{provider}", last_error=str(e))
             render_out = {}
     else:
-        repo.update_job(job_id=job_id, state="failed_higgsfield", last_error="missing higgsfield config")
+        repo.update_job(job_id=job_id, state=f"failed_{provider}", last_error=renderer_err or f"missing {provider} config")
 
     video_path: Path | None = None
     maybe_url = ""
@@ -263,7 +330,7 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
         elif maybe_url:
             video_path = settings.assets_dir / job_id / "video.mp4"
             try:
-                higgsfield.download_if_url(maybe_url=maybe_url, out_path=video_path)
+                renderer.download_if_url(maybe_url=maybe_url, out_path=video_path)
             except ApiCallError as e:
                 repo.log_api_error(job_id=job_id, asset_id="", err=e)
                 video_path = None
@@ -280,11 +347,11 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
         except Exception:
             pass
         repo.add_cost_event(
-            provider="higgsfield",
+            provider=provider,
             job_id=job_id,
             asset_id=video_asset_id,
             month_key=month_key,
-            cost_usd=float(settings.higgsfield_cost_per_video_usd),
+            cost_usd=float(projected_cost),
             units=1,
             details={"video_url": maybe_url, "kind": "video_render"},
         )
@@ -296,6 +363,8 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     bundle_path.write_text(json.dumps(score_json, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     repo.add_asset(job_id=job_id, kind="content_bundle", platform="all", path=bundle_path)
+
+    _maybe_generate_carousel_images(settings=settings, repo=repo, job_id=job_id, score_json=score_json)
 
     approval_status = "awaiting_approval" if settings.require_approval else "queued"
     repo.enqueue_publish(
@@ -318,6 +387,48 @@ def _process_job(*, settings: Settings, repo: Repo, deepseek: DeepSeekClient, hi
     )
 
     repo.update_job(job_id=job_id, state="queued")
+
+
+def _maybe_generate_carousel_images(*, settings: Settings, repo: Repo, job_id: str, score_json: dict) -> None:
+    """Optional: render Instagram carousel slide images via the official Gemini image API.
+
+    Off unless ENABLE_IMAGE_GEN=true and a Gemini key is present. Failures are
+    swallowed so they never block the job. (Multi-image IG publishing = follow-up.)
+    """
+    if not settings.enable_image_gen or not settings.gemini_api_key.strip():
+        return
+    carousel = (score_json.get("content_plan", {}) or {}).get("instagram", {}).get("carousel", {}) or {}
+    if not carousel.get("enabled"):
+        return
+    slides = carousel.get("slides") or []
+    if not slides:
+        return
+    client = GeminiClient(
+        GeminiConfig(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            timeout_seconds=settings.timeout_seconds_deepseek,
+            image_model=settings.gemini_image_model,
+        )
+    )
+    style = str(score_json.get("visual_style") or "")
+    for i, slide in enumerate(slides[:6]):
+        if not isinstance(slide, dict):
+            continue
+        title = str(slide.get("title") or "")
+        bullets = "; ".join(str(b) for b in (slide.get("bullets") or []))
+        prompt = (
+            f"Vertical 4:5 social media carousel slide. Visual style: {style}. "
+            f"Headline: {title}. Key points: {bullets}. Clean, high-contrast, legible large text."
+        )
+        try:
+            img = client.generate_image(prompt=prompt)
+            out = settings.assets_dir / job_id / f"carousel_{i}.png"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(img)
+            repo.add_asset(job_id=job_id, kind="image", platform="instagram", path=out)
+        except Exception as e:  # noqa: BLE001 - never block the job on image gen
+            log.info("carousel image %d failed: %s", i, e)
 
 
 def _build_publish_payload(score_json: dict, job_id: str, settings: Settings, video_asset_id: str) -> dict:

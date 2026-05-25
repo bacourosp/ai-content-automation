@@ -40,3 +40,17 @@ def test_repo_logs_api_error(tmp_path: Path) -> None:
     req = json.loads(row["request_json"])
     assert req["headers"]["Authorization"] != "Bearer s"
 
+
+def test_api_call_error_str_includes_provider_and_status() -> None:
+    e = ApiCallError(
+        provider="higgsfield",
+        method="POST",
+        url="https://mcp.higgsfield.ai/mcp",
+        status_code=429,
+        message="quota exceeded",
+        request=None,
+        response_text=None,
+    )
+    s = str(e)
+    assert "higgsfield" in s
+    assert "429" in s

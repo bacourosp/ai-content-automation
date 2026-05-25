@@ -23,14 +23,15 @@ class McpTool:
 
 
 class McpHttpClient:
-    def __init__(self, *, url: str, api_key: str, timeout_seconds: int):
+    def __init__(self, *, url: str, api_key: str, timeout_seconds: int, provider: str = "higgsfield"):
         self._url = url.rstrip("/")
         self._api_key = api_key
+        self._provider = provider
         self._http = HttpClient(timeout_seconds=timeout_seconds)
         self._initialized = False
 
     def _headers(self) -> dict[str, str]:
-        h: dict[str, str] = {}
+        h: dict[str, str] = {"Accept": "application/json, text/event-stream"}
         if self._api_key.strip():
             h["Authorization"] = f"Bearer {self._api_key}"
         return h
@@ -40,7 +41,7 @@ class McpHttpClient:
         payload: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": method}
         if params is not None:
             payload["params"] = params
-        j = self._http.post_json(self._url, headers=self._headers(), payload=payload, provider="higgsfield")
+        j = self._http.post_json(self._url, headers=self._headers(), payload=payload, provider=self._provider)
         if isinstance(j, dict) and "error" in j:
             raise McpError(str(j["error"]))
         if not isinstance(j, dict) or "result" not in j:
@@ -53,6 +54,7 @@ class McpHttpClient:
         self._rpc(
             "initialize",
             {
+                "protocolVersion": "2024-11-05",
                 "clientInfo": {"name": "xai-automation", "version": "0.1.0"},
                 "capabilities": {},
             },

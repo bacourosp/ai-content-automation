@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(python3 -m pytest -q)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.remotion.dev)",
+      "WebFetch(domain:mcpmarket.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "Bash(python3 -c \"import xai_automation.mcp.stdio_client, xai_automation.mcp.render, xai_automation.config.settings as s; cfg=s.load_settings\\(\\); print\\('render_provider=', cfg.render_provider, '| glif_cmd=', cfg.glif_mcp_command, '| enable_image_gen=', cfg.enable_image_gen\\)\")",
+      "Bash(python3 -c \"import xai_automation.workflows.pipeline\")",
+      "Bash(python3 -m pytest tests/test_e2e_pipeline.py tests/test_mcp_http_client.py tests/test_http_sse.py tests/test_higgsfield_extract.py -q)",
+      "Bash(python3 -c \"import xai_automation.workflows.pipeline, xai_automation.services.gemini\")",
+      "Read(//private/tmp/**)",
+      "Bash(rm -rf xai_p2)",
+      "Bash(mkdir xai_p2)",
+      "Bash(XAI_ENV_FILE=/tmp/xai_p2/.env RENDER_PROVIDER=glif GLIF_API_TOKEN=x GLIF_RENDER_ID=abc DATA_DIR=/tmp/xai_p2/d SQLITE_PATH=/tmp/xai_p2/d/app.db python3 -m xai_automation.cli init-system)",
+      "Bash(python3 -m pytest tests/test_stdio_client.py tests/test_render_registry.py tests/test_gemini_image.py tests/test_render_pipeline.py -q)",
+      "Bash(python3 -m pytest)",
+      "Bash(python3 -m compileall -q src/ tests/ scripts/)",
+      "Bash(python3 -m xai_automation.cli print-config)"
+    ]
+  }
+}

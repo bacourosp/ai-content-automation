@@ -29,7 +29,7 @@ class XApiClient:
     def __init__(self, *, bearer_token: str, timeout_seconds: int):
         self._bearer = bearer_token
         self._http = HttpClient(timeout_seconds=timeout_seconds)
-        self._base = "https://api.twitter.com/2"
+        self._base = "https://api.x.com/2"
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._bearer}"}

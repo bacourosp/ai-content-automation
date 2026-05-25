@@ -3,7 +3,7 @@
 Automatización local para:
 
 - Detectar nuevos posts sobre IA en X.com (vía X API).
-- Decidir reutilización y ángulo viral con DeepSeek v4 prod vía NVIDIA API.
+- Decidir reutilización y ángulo viral con un LLM: **Gemini** (por defecto, gratis) o DeepSeek vía NVIDIA API.
 - Generar guiones/assets por plataforma (TikTok/Instagram/Facebook).
 - Renderizar video con Higgsfield vía MCP.
 - Encolar y (opcionalmente) publicar con reintentos y estado persistente en SQLite.
@@ -39,6 +39,32 @@ Por defecto el runtime busca `.env` en:
 También puedes forzar una ruta exacta con:
 
 - `XAI_ENV_FILE=/ruta/a/tu.env`
+
+Plantilla completa de variables (con comentarios y de dónde sacar cada credencial): [.env.example](.env.example).
+
+### LLM por defecto
+
+El proveedor por defecto es **Gemini** (`LLM_PROVIDER=gemini`, `GEMINI_MODEL=gemini-2.5-flash`) por su tier gratuito amplio y salida JSON fiable. Alternativa: `LLM_PROVIDER=nvidia` con `DEEPSEEK_MODEL=deepseek-ai/deepseek-v3.1-terminus`.
+
+### Proveedor de render (seleccionable)
+
+El render de video es **seleccionable** con `RENDER_PROVIDER` (default `higgsfield`) para probar cuál da mejor resultado: `higgsfield`, `mcp` (cualquier MCP de render por HTTP que controles), `glif` (oficial, vía stdio, restringido a un glif id fijo), `remotion_media` (vía stdio → kie.ai) y `remotion_app` (HTTP, **solo self-host**, ejecuta código generado por IA). Generación de imágenes para carruseles con la **API oficial de Gemini** (`ENABLE_IMAGE_GEN=true`). Detalle y notas de seguridad: [docs/SETUP_PLATFORMS.md](docs/SETUP_PLATFORMS.md).
+
+### Conectar plataformas (OAuth automático)
+
+`serve-assets` levanta el servidor de assets + un Cloudflare tunnel, descubre la URL pública, la escribe en `.env` como `PUBLIC_BASE_URL`, e imprime los redirect URIs. Conecta cada cuenta abriendo en el navegador:
+
+- TikTok: `PUBLIC_BASE_URL/oauth/tiktok/start`
+- Meta (IG+FB): `PUBLIC_BASE_URL/oauth/meta/start`
+
+Los tokens se guardan solos en `.env`. Guía detallada por plataforma: [docs/SETUP_PLATFORMS.md](docs/SETUP_PLATFORMS.md).
+
+Para ver el checklist y las URLs actuales sin levantar el tunnel:
+
+```bash
+xai-automation init-system            # imprime URLs + checklist
+xai-automation init-system --write-env # además persiste PUBLIC_BASE_URL/LLM en .env
+```
 
 ## Inicializar base SQLite
 
@@ -122,6 +148,24 @@ Ver detalle de un error:
 
 ```bash
 xai-automation error --id <ERROR_ID>
+```
+
+## Cloudflare Tunnel (URL pública)
+
+- Setup completo: [docs/TUNNEL_SETUP.md](file:///Users/pablo/Documents/demo_huggis/ai-content-automation/docs/TUNNEL_SETUP.md)
+- Variables:
+  - `ENABLE_CLOUDFLARE_TUNNEL=true`
+  - `WEBHOOK_PORT=8088`
+  - `CLOUDFLARE_TUNNEL_TOKEN=` (vacío = modo efímero; con token = dominio fijo)
+
+## Inicialización (URLs + checklist)
+
+Imprime redirect URIs, enlaces OAuth, template de assets y un checklist por plataforma basado en tu `PUBLIC_BASE_URL`:
+
+```bash
+xai-automation init-system             # imprime el reporte
+xai-automation init-system --write-env # además persiste PUBLIC_BASE_URL/LLM en .env
+# (equivalente legacy: python3 scripts/init_system.py)
 ```
 
 ## Cola de publicación
